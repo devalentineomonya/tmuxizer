@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"syscall"
+
+	"github.com/devalentineomonya/tmuxizer/internal/config"
 )
 
 // module is the import path `tmuxizer update` installs from.
@@ -63,7 +65,7 @@ const usage = `usage: tmuxizer [command]
   version            print the version
 
 keys in the picker:
-  j/k move   enter open   / filter   s time   x close session   t shell here   q quit
+  j/k move   enter open  ←/→ jump between live sessions   / filter   s time   x close session   t shell here   q quit
 `
 
 // execShell replaces the process with the user's shell inside dir.
@@ -71,6 +73,7 @@ func execShell(dir string) error {
 	if err := os.Chdir(dir); err != nil {
 		return err
 	}
+	markShellSkip(config.StateDir(), os.Getpid())
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "/bin/sh"

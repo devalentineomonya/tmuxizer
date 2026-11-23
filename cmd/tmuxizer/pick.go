@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/devalentineomonya/tmuxizer/internal/config"
 	"github.com/devalentineomonya/tmuxizer/internal/iwashere"
@@ -20,6 +21,10 @@ import (
 const closedCommand = "_closed"
 
 func pick() error {
+	// `t` opens a shell whose startup file runs this picker again; skip that one.
+	if consumeShellSkip(config.StateDir(), os.Getppid(), time.Now()) {
+		return nil
+	}
 	if !tmux.Available() {
 		return errors.New("tmux is not installed")
 	}
