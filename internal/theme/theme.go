@@ -22,6 +22,7 @@ type Theme struct {
 	Warn    lipgloss.Style
 	Bad     lipgloss.Style
 	Border  lipgloss.Style // panel borders
+	Focus   lipgloss.Style // border of the focused pane or input
 	accent  lipgloss.TerminalColor
 	palette map[stack.Language]lipgloss.TerminalColor
 }
@@ -40,6 +41,7 @@ func New(accent string) Theme {
 		Warn:   fg(lipgloss.Color("3")),
 		Bad:    fg(lipgloss.Color("1")),
 		Border: fg(lipgloss.Color("8")),
+		Focus:  fg(ac),
 		accent: ac,
 		palette: map[stack.Language]lipgloss.TerminalColor{
 			stack.Go:         lipgloss.Color("6"),

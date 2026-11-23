@@ -21,7 +21,7 @@ A terminal workflow orchestrator. Open a terminal, pick a project with vim keys,
                                    │ session  ongoing  tmuxizer - Nov 23  │
                                    │ note     “wire the auth middleware”  │
                                    ╰──────────────────────────────────────╯
- j/k move · enter open · / filter · x close · t shell here · q quit
+ j/k move · enter open · ←/→ live sessions · / filter · x close · t shell here · q quit
 ```
 
 ## What it does
@@ -66,19 +66,24 @@ If you prefer to do it by hand: `eval "$(tmuxizer init zsh)"` in your rc (or bas
 | `ctrl+d` `ctrl+u` | half page |
 | `g` `G` | top, bottom |
 | `/` | fuzzy filter, matched letters are underlined (`enter` accepts, `esc` clears) |
-| `enter` `l` | open the project |
+| `enter` | attach if its session is running, otherwise show the launch options |
+| `→` `l` / `←` `h` | jump to the next / previous running session (selects only, never opens) |
 | `s` | time spent per project; `h` `l` switch today, this week, all time |
 | `x` | close its running session (asks first) |
 | `t` | plain shell in the project directory, no tmux |
 | `q` `esc` | quit to your shell |
 
+The launch options open as a dialog over the picker. The session name input is focused first and cannot be left empty while iwashere tracking is on.
+
 | Launch options | |
 | --- | --- |
+| `enter` | in the name input, accept it and move on; on an option row, launch |
 | `j` `k` | move |
 | `h` `l` | change run command or editor |
 | `space` | toggle an agent or iwashere |
-| `e` | on the `session` row, edit the iwashere session title (`enter` accepts, `esc` cancels) |
-| `enter` | launch |
+| `/` | edit the session name from any row (`esc` cancels the edit) |
+| `enter` `e` | on the name row, edit it |
+| `esc` `q` `backspace` | back to the project list |
 
 Projects that already have a session attach straight away. Inside tmux, tmuxizer switches client instead of nesting.
 

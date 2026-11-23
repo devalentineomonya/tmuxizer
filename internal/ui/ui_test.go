@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/devalentineomonya/tmuxizer/internal/git"
 	"github.com/devalentineomonya/tmuxizer/internal/launcher"
 	"github.com/devalentineomonya/tmuxizer/internal/project"
@@ -153,6 +154,68 @@ func TestLiveProjectSkipsOptions(t *testing.T) {
 	}
 }
 
+func TestRightJumpsBetweenLiveProjectsWithoutOpening(t *testing.T) {
+	a := makeProject(t, "alpha", "go.mod", "module a")
+	b := makeProject(t, "beta", "go.mod", "module b")
+	c := makeProject(t, "gamma", "go.mod", "module c")
+	d := makeProject(t, "delta", "go.mod", "module d")
+	m := newModel(t, Deps{
+		Projects: []project.Project{a, b, c, d},
+		Live:     map[string]string{b.Path: "beta", d.Path: "delta"},
+	})
+	name := func() string { return m.view[m.cursor].project.Name }
+
+	first := name() // live projects sort first
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	second := name()
+	if !m.view[m.cursor].live() || second == first {
+		t.Fatalf("right should move to the other live project, got %s then %s", first, second)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if name() != first {
+		t.Errorf("right should wrap to %s, got %s", first, name())
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if name() != second {
+		t.Errorf("left should go back to %s, got %s", second, name())
+	}
+	if m.done || m.screen != picker {
+		t.Errorf("moving must not open anything: done=%v screen=%v", m.done, m.screen)
+	}
+	press(m, "enter")
+	if m.result.Action != Launch {
+		t.Errorf("enter should attach, result = %+v", m.result)
+	}
+}
+
+func TestRightWithoutLiveProjectsStaysPut(t *testing.T) {
+	a := makeProject(t, "alpha", "go.mod", "module a")
+	b := makeProject(t, "beta", "go.mod", "module b")
+	m := newModel(t, Deps{Projects: []project.Project{a, b}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if m.cursor != 0 || m.screen != picker || m.done {
+		t.Errorf("right with no live sessions must do nothing: cursor=%d screen=%v", m.cursor, m.screen)
+	}
+}
+
+func TestLaunchOptionsGoBackToPicker(t *testing.T) {
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyEsc}, {Type: tea.KeyBackspace}, {Type: tea.KeyRunes, Runes: []rune("q")}} {
+		p := makeProject(t, "web", "go.mod", "module w")
+		m := newModel(t, Deps{Projects: []project.Project{p}})
+		press(m, "enter")
+		if m.screen != options {
+			t.Fatalf("enter should show the launch options, screen = %v", m.screen)
+		}
+		if !strings.Contains(m.View(), "esc back") {
+			t.Errorf("footer should name the way back:\n%s", m.View())
+		}
+		m.Update(key)
+		if m.screen != picker || m.done {
+			t.Errorf("%q should return to the picker: screen=%v done=%v", key.String(), m.screen, m.done)
+		}
+	}
+}
+
 func TestShellKey(t *testing.T) {
 	p := makeProject(t, "web", "go.mod", "module w")
 	m := newModel(t, Deps{Projects: []project.Project{p}})
@@ -170,7 +233,7 @@ func TestResumeScreenShownFirst(t *testing.T) {
 	if m.screen != resume {
 		t.Fatal("orphans should open the resume prompt")
 	}
-	if !strings.Contains(m.View(), "welcome back") {
+	if !strings.Contains(m.View(), "Welcome back") {
 		t.Error("resume view missing heading")
 	}
 	press(m, "r")
@@ -272,7 +335,7 @@ func TestCloseNeedsConfirmation(t *testing.T) {
 	})
 
 	press(m, "x")
-	if !strings.Contains(m.View(), "close web?") {
+	if !strings.Contains(m.View(), "Close session?") {
 		t.Fatal("x should ask before closing")
 	}
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
@@ -422,7 +485,7 @@ func TestSessionTitleShowsRenderedPreview(t *testing.T) {
 	m, _ := trackingModel(t, nil)
 	press(m, "enter")
 	view := m.View()
-	for _, want := range []string{"session", "{project} - {date} {time}", "→ web - Jan 1 00:00"} {
+	for _, want := range []string{"Session name", "{project} - {date} {time}", "→ web - Jan 1 00:00"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("options missing %q:\n%s", want, view)
 		}
@@ -431,10 +494,9 @@ func TestSessionTitleShowsRenderedPreview(t *testing.T) {
 
 func TestSessionTitleCanBeRenamed(t *testing.T) {
 	m, _ := trackingModel(t, nil)
-	press(m, "enter", "j", "j") // run, iwashere, session
-	press(m, "e")
+	press(m, "enter") // the dialog opens with the name input focused
 	if !m.launch.editing {
-		t.Fatal("e should start editing the title")
+		t.Fatal("the session name should be asked for first")
 	}
 	m.launch.title.SetValue("")
 	for _, r := range "Billing fix" {
@@ -448,7 +510,7 @@ func TestSessionTitleCanBeRenamed(t *testing.T) {
 
 func TestSessionTitleEditCanBeCancelled(t *testing.T) {
 	m, _ := trackingModel(t, nil)
-	press(m, "enter", "j", "j", "e")
+	press(m, "enter")
 	press(m, "x", "y", "z")
 	press(m, "esc")
 	if m.launch.editing || m.launch.title.Value() != "{project} - {date} {time}" {
@@ -461,7 +523,7 @@ func TestSessionTitleEditCanBeCancelled(t *testing.T) {
 
 func TestEditingKeepsNavigationKeysAsText(t *testing.T) {
 	m, _ := trackingModel(t, nil)
-	press(m, "enter", "j", "j", "e")
+	press(m, "enter")
 	m.launch.title.SetValue("")
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("jjq")}) // a burst, not navigation
 	if m.launch.title.Value() != "jjq" || m.screen != options {
@@ -477,7 +539,7 @@ func TestManifestPinsSessionTitle(t *testing.T) {
 	if !strings.Contains(m.View(), "pinned") {
 		t.Error("manifest title should be marked pinned")
 	}
-	press(m, "enter")
+	press(m, "enter", "enter") // accept the name, then launch
 	if m.result.Plan.Title != "{project} on {branch}" {
 		t.Errorf("title = %q", m.result.Plan.Title)
 	}
@@ -509,7 +571,7 @@ func TestTimeScreenCyclesPeriods(t *testing.T) {
 	}
 	m.Update(cmd())
 	view := m.View()
-	for _, want := range []string{"time spent", "today", "web", "1h 30m", "total"} {
+	for _, want := range []string{"Time spent", "today", "web", "1h 30m", "total"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("time screen missing %q:\n%s", want, view)
 		}
@@ -546,5 +608,96 @@ func TestTimeScreenEmptyState(t *testing.T) {
 	m.Update(cmd())
 	if !strings.Contains(m.View(), "no time recorded") {
 		t.Errorf("empty state missing:\n%s", m.View())
+	}
+}
+
+func TestSessionNameIsRequired(t *testing.T) {
+	m, _ := trackingModel(t, nil)
+	press(m, "enter")
+	if !m.launch.editing || m.launch.cursor != 0 {
+		t.Fatalf("name input should be focused first: editing=%v cursor=%d", m.launch.editing, m.launch.cursor)
+	}
+	m.launch.title.SetValue("   ")
+	press(m, "enter")
+	if !m.launch.editing || !m.launch.nameErr || m.done {
+		t.Fatalf("a blank name must keep the input open: editing=%v err=%v done=%v", m.launch.editing, m.launch.nameErr, m.done)
+	}
+	if !strings.Contains(m.View(), "needs a name") {
+		t.Errorf("view should explain why:\n%s", m.View())
+	}
+	press(m, "a")
+	if m.launch.nameErr {
+		t.Error("typing clears the error")
+	}
+}
+
+func TestEmptyNameBlocksLaunchFromAnyRow(t *testing.T) {
+	m, _ := trackingModel(t, nil)
+	press(m, "enter", "enter") // accept the default name, leave the input
+	m.launch.title.SetValue("")
+	press(m, "j", "enter") // launch from another row
+	if m.done || !m.launch.editing || m.launch.cursor != 0 {
+		t.Errorf("launch with no name should jump back to the input: done=%v editing=%v cursor=%d", m.done, m.launch.editing, m.launch.cursor)
+	}
+}
+
+func TestUntrackedLaunchNeedsNoName(t *testing.T) {
+	m, _ := trackingModel(t, func(p project.Project) {
+		writeFile(t, p, ".tmuxizer.toml", "track = false\n")
+	})
+	press(m, "enter")
+	if m.launch.editing {
+		t.Error("nothing is recorded, so the name input should not grab focus")
+	}
+	m.launch.title.SetValue("")
+	press(m, "enter")
+	if !m.done {
+		t.Error("an untracked launch should not require a name")
+	}
+}
+
+func TestNameCanBeEditedAgainAfterAccepting(t *testing.T) {
+	m, _ := trackingModel(t, nil)
+	press(m, "enter", "enter") // open, accept the name
+	if m.launch.editing || m.launch.cursor != 1 {
+		t.Fatalf("accepting should move on to the options: editing=%v cursor=%d", m.launch.editing, m.launch.cursor)
+	}
+	press(m, "k", "enter") // back to the name, enter edits it
+	if !m.launch.editing || m.launch.cursor != 0 {
+		t.Fatalf("enter on the name row should edit it: editing=%v cursor=%d", m.launch.editing, m.launch.cursor)
+	}
+	m.launch.title.SetValue("")
+	for _, r := range "Fix auth" {
+		press(m, string(r))
+	}
+	press(m, "enter", "enter")
+	if m.result.Plan.Title != "Fix auth" {
+		t.Errorf("title = %q", m.result.Plan.Title)
+	}
+}
+
+func TestDialogFadesAndShadowsBackground(t *testing.T) {
+	m, _ := trackingModel(t, nil)
+	press(m, "enter")
+	for i, line := range strings.Split(m.View(), "\n") {
+		if w := lipgloss.Width(line); w > m.width {
+			t.Errorf("line %d is %d cells wide, terminal is %d", i, w, m.width)
+		}
+	}
+	if !strings.Contains(m.View(), "░░") {
+		t.Error("dialog should cast a shadow")
+	}
+}
+
+func TestSlashJumpsToNameFromAnyRow(t *testing.T) {
+	m, _ := trackingModel(t, nil)
+	press(m, "enter", "enter", "j", "j") // accept the name, move down two rows
+	press(m, "/")
+	if !m.launch.editing || m.launch.cursor != 0 {
+		t.Errorf("/ should edit the name: editing=%v cursor=%d", m.launch.editing, m.launch.cursor)
+	}
+	press(m, "/")
+	if m.launch.title.Value() != "{project} - {date} {time}/" {
+		t.Errorf("/ while editing is text, got %q", m.launch.title.Value())
 	}
 }

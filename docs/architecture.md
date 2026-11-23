@@ -117,6 +117,7 @@ launch ──▶ state.sessions[name] written
 - **Instant start.** The picker renders from the cached project list, then rescans in the background and swaps the list in, keeping the cursor on the same project.
 - **Async git.** Branch and dirty state load only for the selected project, once.
 - **Matching is fuzzy on names, substring on paths.** Fuzzy matching a long path matches nearly everything; name matches carry positions so the row can underline them.
+- **Boxes and dialogs.** `frame` (internal/ui/frame.go) draws a rounded box with its title in the top border; `overlay` centres a dialog over the dimmed picker. Both use only theme ANSI styles, so no background is painted. The launch options, close confirmation and resume prompt are dialogs.
 - **Typed keys can arrive as one message.** Bubble Tea delivers fast input like `jj` as a single multi-rune key; the model splits it back into single keys unless the filter input is focused or it is a paste.
 - **Detection never fails.** `stack.Detect` returns what it found; unreadable files and broken manifests just yield less.
 - **iwashere failures never block launch.** Tracking is best effort.

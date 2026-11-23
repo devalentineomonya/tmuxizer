@@ -58,15 +58,13 @@ func (m *Model) manifestOf(path string) manifestInfo {
 	return mi
 }
 
-// renderPreview draws the detail panel for the selected project.
-func (m *Model) renderPreview(width int) string {
-	panel := m.th.Panel(width - 4)
+// renderPreview draws the details of the selected project, inner cells wide.
+func (m *Model) renderPreview(inner int) string {
 	e, ok := m.selected()
 	if !ok {
-		return panel.Render("")
+		return ""
 	}
 	th := m.th
-	inner := width - 6
 	s := m.stackOf(e.project.Path)
 
 	var b strings.Builder
@@ -76,11 +74,6 @@ func (m *Model) renderPreview(width int) string {
 	}
 	gap := func() { line("") }
 
-	title := th.Accent.Render(truncate(e.project.Name, inner-2))
-	if e.live() {
-		title += " " + th.Good.Render("●")
-	}
-	line(title)
 	line(th.Dim.Render(truncate(shortPath(e.project.Path), inner)))
 	gap()
 
@@ -121,7 +114,7 @@ func (m *Model) renderPreview(width int) string {
 	}
 	field("opened", th.Dim.Render(ago(e.opened, m.deps.Now())))
 
-	return panel.Render(strings.TrimRight(b.String(), "\n"))
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func (m *Model) stackLine(s stack.Stack) string {

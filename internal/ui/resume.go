@@ -41,12 +41,11 @@ func (m *Model) updateResume(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// viewResume lists unfinished sessions in a dialog over the picker.
 func (m *Model) viewResume() string {
 	th := m.th
-	var b strings.Builder
-	b.WriteString(" " + th.Accent.Render("welcome back") + "\n")
-	b.WriteString(" " + th.Dim.Render("these sessions did not end cleanly") + "\n\n")
-
+	width := clamp(m.width-4, 30, 76)
+	lines := []string{th.Dim.Render("these sessions did not end cleanly"), ""}
 	for i, o := range m.orphans {
 		bar, name := " ", th.Strong.Render(o.Project.Name)
 		if i == m.orphan {
@@ -56,11 +55,12 @@ func (m *Model) viewResume() string {
 		if o.Work != nil {
 			detail += " · " + truncate(o.Work.Title, 40)
 		}
-		b.WriteString(" " + bar + " " + pad(name, 24) + th.Dim.Render(detail) + "\n")
+		lines = append(lines, bar+" "+pad(name, 20)+th.Dim.Render(detail))
 	}
 	if m.notice != "" {
-		b.WriteString("\n " + th.Bad.Render(m.notice) + "\n")
+		lines = append(lines, "", th.Bad.Render(m.notice))
 	}
-	b.WriteString("\n" + m.help("r", "resume", "n", "start new", "d", "dismiss", "s", "skip"))
-	return "\n" + b.String()
+	lines = append(lines, "", truncate(m.hints("r", "resume", "n", "start new", "d", "dismiss", "s", "skip"), width-4))
+	dialog := m.frame("Welcome back", "", strings.Join(lines, "\n"), width, 0, frameFocus)
+	return m.overlay(m.viewPicker(), dialog)
 }

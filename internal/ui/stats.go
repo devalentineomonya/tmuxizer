@@ -86,20 +86,11 @@ func (m *Model) viewStats() string {
 			tabs[i] = th.Dim.Render(p.String())
 		}
 	}
-	left := th.Accent.Render("▌time") + th.Strong.Render(" spent")
-	right := strings.Join(tabs, "   ")
-	gap := max(m.width-2-lipgloss.Width(left)-lipgloss.Width(right), 1)
-
-	body := th.Dim.Render("  adding it up…")
+	width := max(m.width-2, 6)
+	body := th.Dim.Render("adding it up…")
 	if m.statsReady {
-		body = RenderReport(th, m.stats, m.width-2)
+		body = RenderReport(th, m.stats, width-4)
 	}
-	return strings.Join([]string{
-		" " + left + strings.Repeat(" ", gap) + right,
-		" " + th.Dim.Render(strings.Repeat("─", max(m.width-2, 0))),
-		"",
-		body,
-		"",
-		m.help("h/l", "period", "esc", "back"),
-	}, "\n")
+	box := m.frame("Time spent", strings.Join(tabs, "  "), body, width, max(m.height-1, 3), frameFocus)
+	return indent(box, 1) + "\n" + m.help("h/l", "period", "esc", "back")
 }

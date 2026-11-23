@@ -14,7 +14,8 @@ import (
 )
 
 const (
-	chromeLines  = 4  // header, rule, help line, one spare row
+	chromeLines  = 4  // header, pane top and bottom borders, help line
+	filterLines  = 3  // the filter input box
 	splitMinCols = 96 // narrower terminals skip the preview pane
 )
 
@@ -127,10 +128,16 @@ func (m *Model) liveEntries() []entry {
 	return live
 }
 
+// showFilter reports whether the filter box is on screen.
+func (m *Model) showFilter() bool { return m.filtered || m.filter.Value() != "" }
+
 func (m *Model) listHeight() int {
 	rows := m.height - chromeLines
 	if len(m.liveEntries()) > 0 {
 		rows-- // the live strip
+	}
+	if m.showFilter() {
+		rows -= filterLines
 	}
 	return max(rows, 1)
 }
@@ -150,6 +157,19 @@ func (m *Model) move(delta int) tea.Cmd {
 	m.cursor = clamp(m.cursor+delta, 0, max(len(m.view)-1, 0))
 	m.keepCursorVisible()
 	return m.gitCmd()
+}
+
+// jumpLive moves the selection to the next (dir 1) or previous (dir -1)
+// running session, wrapping around. It only selects; enter does the opening.
+func (m *Model) jumpLive(dir int) tea.Cmd {
+	n := len(m.view)
+	for i := 1; i < n; i++ {
+		idx := ((m.cursor+dir*i)%n + n) % n
+		if m.view[idx].live() {
+			return m.move(idx - m.cursor)
+		}
+	}
+	return nil
 }
 
 // gitCmd fetches git status for the selected project once.
@@ -225,9 +245,14 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.move(len(m.view))
 	case "/":
 		m.filtered = true
+		m.keepCursorVisible()
 		return m, m.filter.Focus()
-	case "enter", "l", "right":
+	case "enter":
 		return m.open()
+	case "l", "right":
+		return m, m.jumpLive(1)
+	case "h", "left":
+		return m, m.jumpLive(-1)
 	case "s":
 		m.screen, m.statsReady = stats, false
 		return m, m.statsCmd()
@@ -273,26 +298,79 @@ func (m *Model) open() (tea.Model, tea.Cmd) {
 	}
 	m.launch = m.newLaunchForm(e.project)
 	m.screen = options
+	if m.launch.hasTitle() && m.launch.tracked() {
+		return m, m.launch.startNaming() // name the session first
+	}
+	if m.launch.hasTitle() {
+		m.launch.cursor = 1 // nothing is recorded, so start on the options
+	}
 	return m, nil
 }
 
 func (m *Model) viewPicker() string {
-	lines := []string{" " + m.headerLine(), " " + m.th.Dim.Render(strings.Repeat("─", max(m.width-2, 0)))}
+	avail := max(m.width-2, 6)
+	lines := []string{" " + m.headerLine()}
 	if strip := m.liveStrip(); strip != "" {
 		lines = append(lines, " "+strip)
 	}
+	if m.showFilter() {
+		kind := frameIdle
+		if m.filtered {
+			kind = frameFocus
+		}
+		m.filter.Width = max(avail-7, 4) // prompt and cursor take 3 cells
+		lines = append(lines, indent(m.frame("Filter", fmt.Sprintf("%d of %d", len(m.view), len(m.all)), m.filter.View(), avail, filterLines, kind), 1))
+	}
 
-	listWidth := m.width - 4
-	split := m.width >= splitMinCols
+	h := m.listHeight() + 2
+	split := m.width >= splitMinCols && len(m.view) > 0
+	leftW := avail
 	if split {
-		listWidth = max(m.width*2/5, 36)
+		leftW = clamp(avail*2/5, 38, avail-34)
 	}
-	body := m.renderList(listWidth, split)
+	kind := frameFocus
+	if m.filtered {
+		kind = frameIdle
+	}
+	count := ""
+	if len(m.view) > 0 {
+		count = fmt.Sprintf("%d of %d", m.cursor+1, len(m.view))
+	}
+	body := m.frame("Projects", count, m.renderList(leftW-4, split), leftW, h, kind)
 	if split {
-		previewWidth := m.width - listWidth - 4
-		body = lipgloss.JoinHorizontal(lipgloss.Top, body, "  ", m.renderPreview(previewWidth))
+		body = lipgloss.JoinHorizontal(lipgloss.Top, body, m.previewFrame(avail-leftW, h))
 	}
-	return strings.Join(append(lines, indent(body, 1), truncate(m.footer(), m.width)), "\n")
+	screen := strings.Join(append(lines, indent(body, 1), truncate(m.footer(), m.width)), "\n")
+	if m.confirm != "" {
+		return m.overlay(screen, m.confirmDialog())
+	}
+	return screen
+}
+
+// previewFrame is the details pane for the selected project.
+func (m *Model) previewFrame(width, height int) string {
+	e, ok := m.selected()
+	if !ok {
+		return ""
+	}
+	title := e.project.Name
+	if e.live() {
+		title += " ●"
+	}
+	return m.frame(title, "", m.renderPreview(width-4), width, height, frameIdle)
+}
+
+// confirmDialog asks before a running session is closed.
+func (m *Model) confirmDialog() string {
+	th := m.th
+	name := project.New(m.confirm).Name
+	body := strings.Join([]string{
+		th.Strong.Render(name),
+		th.Dim.Render("its windows and everything running in them stop"),
+		"",
+		m.hints("y", "close", "any key", "cancel"),
+	}, "\n")
+	return m.frame("Close session?", "", body, clamp(m.width-4, 30, 60), 0, frameBad)
 }
 
 // headerLine shows the wordmark with the counts, or the filter while typing.
@@ -300,10 +378,7 @@ func (m *Model) headerLine() string {
 	th := m.th
 	left := th.Accent.Render("▌tmux") + th.Strong.Render("izer")
 	right := th.Dim.Render(fmt.Sprintf("%d projects", len(m.view)))
-	if m.filtered || m.filter.Value() != "" {
-		left = m.filter.View()
-		right = th.Dim.Render(fmt.Sprintf("%d of %d", len(m.view), len(m.all)))
-	} else if live := len(m.liveEntries()); live > 0 {
+	if live := len(m.liveEntries()); live > 0 {
 		right += th.Dim.Render(" · ") + th.Good.Render(fmt.Sprintf("%d live", live))
 	}
 	if m.scanning {
@@ -412,16 +487,22 @@ func indent(s string, n int) string {
 // footer shows a pending question, a notice, or the key hints.
 func (m *Model) footer() string {
 	switch {
-	case m.confirm != "":
-		return " " + m.th.Warn.Render("close "+project.New(m.confirm).Name+"?") + "  " + m.hints("y", "close", "any key", "cancel")
 	case m.notice != "":
 		return " " + m.th.Bad.Render(m.notice)
 	case m.filtered:
 		return m.help("enter", "accept", "esc", "clear", "ctrl+n/p", "move")
 	}
-	hints := []string{"j/k", "move", "enter", "open", "/", "filter", "s", "time"}
+	// Say what enter will do: attaching is immediate, launching shows options first.
+	enter, live := "launch…", false
 	if e, ok := m.selected(); ok && e.live() {
-		hints = append(hints, "x", "close")
+		enter, live = "attach to session", true
+	}
+	hints := []string{"j/k", "move", "enter", enter, "/", "filter", "s", "time"}
+	if len(m.liveEntries()) > 0 {
+		hints = append(hints, "←/→", "live sessions")
+	}
+	if live {
+		hints = append(hints, "x", "close session")
 	}
 	return m.help(append(hints, "t", "shell here", "q", "quit")...)
 }

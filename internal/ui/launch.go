@@ -49,6 +49,32 @@ type launchForm struct {
 	title     textinput.Model // iwashere session title template
 	titlePrev string          // value to restore when an edit is cancelled
 	editing   bool            // keys go to the title input
+	nameErr   bool            // the title was left empty
+}
+
+// hasTitle reports whether the form asks for a session name.
+func (f launchForm) hasTitle() bool { return len(f.rows) > 0 && f.rows[0].kind == rowTitle }
+
+// tracked reports whether this launch records an iwashere session, which is
+// the only thing the name is for.
+func (f launchForm) tracked() bool {
+	for _, r := range f.rows {
+		if r.kind == rowTrack {
+			return r.on
+		}
+	}
+	return false
+}
+
+// needsName reports whether an empty title would block the launch.
+func (f launchForm) needsName() bool {
+	return f.hasTitle() && f.tracked() && strings.TrimSpace(f.title.Value()) == ""
+}
+
+// startNaming puts the cursor in the name input.
+func (f *launchForm) startNaming() tea.Cmd {
+	f.cursor, f.editing, f.titlePrev = 0, true, f.title.Value()
+	return f.title.Focus()
 }
 
 // newLaunchForm builds the options for a project. A value pinned in the
@@ -107,7 +133,8 @@ func (m *Model) newLaunchForm(p project.Project) launchForm {
 		f.title.CharLimit = 80
 		f.title.Width = 44
 		f.title.SetValue(firstNonEmpty(mf.Session, m.deps.TitleTemplate, launcher.DefaultTitle))
-		f.rows = append(f.rows, formRow{kind: rowTitle, label: "session", pinned: mf.Session != ""})
+		name := formRow{kind: rowTitle, label: "session name", pinned: mf.Session != ""}
+		f.rows = append([]formRow{name}, f.rows...)
 	}
 	return f
 }
@@ -182,10 +209,13 @@ func (m *Model) updateOptions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	row := &f.rows[f.cursor]
 	switch msg.String() {
+	case "/":
+		if f.hasTitle() { // jump to the name from any row, like the picker's filter
+			return m, f.startNaming()
+		}
 	case "e", "i":
 		if row.kind == rowTitle {
-			f.editing, f.titlePrev = true, f.title.Value()
-			return m, f.title.Focus()
+			return m, f.startNaming()
 		}
 	case "j", "down", "tab":
 		f.cursor = (f.cursor + 1) % len(f.rows)
@@ -200,8 +230,7 @@ func (m *Model) updateOptions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case row.cycles():
 			cycle(row, 1)
 		case row.kind == rowTitle:
-			f.editing, f.titlePrev = true, f.title.Value()
-			return m, f.title.Focus()
+			return m, f.startNaming()
 		default:
 			row.on = !row.on
 		}
@@ -209,8 +238,15 @@ func (m *Model) updateOptions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if f.manifest.err != nil {
 			return m, nil // the error is shown; fix the file first
 		}
+		if row.kind == rowTitle {
+			return m, f.startNaming() // enter on an input edits it
+		}
+		if f.needsName() {
+			f.nameErr = true
+			return m, f.startNaming()
+		}
 		return m.finish(Result{Action: Launch, Plan: m.resolve(f.plan(), *f)})
-	case "esc", "q":
+	case "esc", "q", "backspace":
 		m.screen = picker
 	}
 	return m, nil
@@ -221,15 +257,21 @@ func (m *Model) editTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	f := &m.launch
 	switch msg.String() {
 	case "enter":
-		f.editing = false
+		if f.needsName() {
+			f.nameErr = true // a session must be named; stay in the input
+			return m, nil
+		}
+		f.editing, f.nameErr = false, false
 		f.title.Blur()
+		f.cursor = min(f.cursor+1, len(f.rows)-1) // on to the options
 	case "esc":
 		f.title.SetValue(f.titlePrev)
-		f.editing = false
+		f.editing, f.nameErr = false, false
 		f.title.Blur()
 	default:
 		var cmd tea.Cmd
 		f.title, cmd = f.title.Update(msg)
+		f.nameErr = false
 		return m, cmd
 	}
 	return m, nil
@@ -255,38 +297,88 @@ func cycle(r *formRow, delta int) {
 	r.index = (r.index + delta + len(r.choices)) % len(r.choices)
 }
 
+// viewOptions shows the launch dialog over the dimmed picker.
 func (m *Model) viewOptions() string {
-	th := m.th
-	f := m.launch
-	var b strings.Builder
+	return m.overlay(m.viewPicker(), m.optionsDialog())
+}
 
-	b.WriteString(" " + th.Accent.Render(f.project.Name) + "  " + th.Dim.Render(shortPath(f.project.Path)) + "\n")
-	b.WriteString(" " + th.Dim.Render(describeStack(f.stack)) + "\n\n")
+func (m *Model) optionsDialog() string {
+	th, f := m.th, m.launch
+	width := clamp(m.width-4, 30, 76)
+	inner := width - 4
+	compact := m.height < 24
+
+	var lines []string
+	cursorLine := 0
+	add := func(s string) { lines = append(lines, strings.Split(s, "\n")...) }
+	spacer := func() {
+		if !compact {
+			add("")
+		}
+	}
+
+	add(th.Strong.Render(f.project.Name) + "  " + th.Dim.Render(truncate(shortPath(f.project.Path), max(inner-lipgloss.Width(f.project.Name)-2, 8))))
+	if !compact {
+		add(th.Dim.Render(describeStack(f.stack)))
+	}
+	spacer()
+	m.launch.title.Width = max(inner-5, 4) // box border, padding and cursor
 
 	for i, r := range f.rows {
-		bar := " "
-		label := pad(r.label, 12)
-		if i == f.cursor {
-			bar = th.Accent.Render("▌")
-			label = th.Accent.Render(label)
+		active := i == f.cursor
+		if r.kind == rowTitle {
+			cursorLine = len(lines) + 1
+			kind := frameIdle
+			switch {
+			case f.nameErr:
+				kind = frameBad
+			case active:
+				kind = frameFocus
+			}
+			tag := ""
+			if r.pinned {
+				tag = "pinned"
+			}
+			add(m.frame("Session name", tag, m.titleInput(), inner, 3, kind))
+			if note := m.titleNote(); note != "" && (!compact || f.nameErr) {
+				add(note)
+			}
+			spacer()
+			continue
 		}
-		b.WriteString(" " + bar + " " + label + m.rowValue(r, i == f.cursor) + "\n")
+		bar, label := " ", pad(r.label, 12)
+		if active {
+			bar, label = th.Accent.Render("▌"), th.Accent.Render(label)
+			cursorLine = len(lines)
+		}
+		add(bar + " " + label + m.rowValue(r, active))
 	}
-	b.WriteString(m.manifestNotes(f))
-	b.WriteString("\n" + m.optionsHelp())
+	if notes := strings.TrimRight(m.manifestNotes(f), "\n"); notes != "" {
+		for _, l := range strings.Split(notes, "\n") {
+			if l = strings.TrimSpace(l); l != "" {
+				add(l)
+			}
+		}
+	}
+	spacer()
+	help := truncate(strings.TrimPrefix(m.optionsHelp(), " "), inner)
 
-	return lipgloss.NewStyle().MarginTop(1).Render(b.String())
+	body := window(lines, cursorLine, max(m.height-3, 1)) // frame borders and the help line
+	return m.frame("Launch", "", strings.Join(append(body, help), "\n"), width, 0, frameFocus)
 }
 
 func (m *Model) optionsHelp() string {
 	f := m.launch
 	switch {
 	case f.editing:
-		return m.help("type", "the title", "enter", "accept", "esc", "cancel")
+		return m.help("enter", "accept name", "esc", "cancel")
 	case f.rows[f.cursor].kind == rowTitle:
-		return m.help("e", "edit title", "j/k", "move", "enter", "launch", "esc", "back")
+		return m.help("enter", "edit name", "j/k", "move", "esc", "back")
 	}
-	return m.help("j/k", "move", "h/l", "change", "space", "toggle", "enter", "launch", "esc", "back")
+	if f.hasTitle() {
+		return m.help("enter", "launch", "/", "edit name", "j/k", "move", "h/l", "change", "space", "toggle", "esc", "back")
+	}
+	return m.help("enter", "launch", "j/k", "move", "h/l", "change", "space", "toggle", "esc", "back")
 }
 
 // manifestNotes lists what the project's manifest adds beyond the rows.
@@ -321,9 +413,6 @@ func (m *Model) rowValue(r formRow, active bool) string {
 
 func (m *Model) rowChoice(r formRow, active bool) string {
 	th := m.th
-	if r.kind == rowTitle {
-		return m.titleValue()
-	}
 	if r.cycles() {
 		v := r.choices[r.index]
 		if r.index == 0 {
@@ -340,26 +429,32 @@ func (m *Model) rowChoice(r formRow, active bool) string {
 	return th.Dim.Render("○ off")
 }
 
-// titleValue shows the session title template and, when it has tokens, how
-// it will read.
-func (m *Model) titleValue() string {
+// titleInput is the text shown inside the session-name box.
+func (m *Model) titleInput() string {
 	th, f := m.th, m.launch
 	if f.editing {
 		return f.title.View()
 	}
-	val := f.title.Value()
 	style := th.Strong
 	for _, r := range f.rows {
 		if r.kind == rowTrack && !r.on {
 			style = th.Dim // not recorded this launch
 		}
 	}
-	out := style.Render(val)
-	if strings.Contains(val, "{") {
-		branch := m.gits[f.project.Path].Branch
-		out += th.Dim.Render("  → " + launcher.RenderTitle(val, f.project.Name, branch, m.deps.Now()))
+	return style.Render(f.title.Value())
+}
+
+// titleNote explains the name: an error, or how a template will read.
+func (m *Model) titleNote() string {
+	th, f := m.th, m.launch
+	if f.nameErr {
+		return " " + th.Bad.Render("a session needs a name")
 	}
-	return out
+	if val := f.title.Value(); strings.Contains(val, "{") {
+		branch := m.gits[f.project.Path].Branch
+		return " " + th.Dim.Render("→ "+launcher.RenderTitle(val, f.project.Name, branch, m.deps.Now()))
+	}
+	return ""
 }
 
 func describeStack(s stack.Stack) string {
